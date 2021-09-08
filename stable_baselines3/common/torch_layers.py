@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple, Type, Union
 import gym
 import torch as th
 from torch import nn
+import torch_geometric.nn as pygnn
 
 from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_image_space
 from stable_baselines3.common.type_aliases import TensorDict
@@ -91,6 +92,44 @@ class NatureCNN(BaseFeaturesExtractor):
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
         return self.linear(self.cnn(observations))
+
+class GCNExtractor(BaseFeaturesExtractor):
+    """
+    GCN from paper: 
+
+    :param observation_space:
+    :param features_dim: Number of features extracted.
+        This corresponds to the number of unit for the last layer.
+    """
+
+    def __init__(self, observation_space, input_dims, hidden_dims=64, output_dims: int = 512):
+        super(GCNExtractor, self).__init__(observation_space, input_dims, output_dims)
+        # We assume CxHxW images (channels first)
+        # Re-ordering will be done by pre-preprocessing or wrapper
+        # assert is_image_space(observation_space, check_channels=False), (
+        #     "You should use NatureCNN "
+        #     f"only with images not with {observation_space}\n"
+        #     "(you are probably using `CnnPolicy` instead of `MlpPolicy` or `MultiInputPolicy`)\n"
+        #     "If you are using a custom environment,\n"
+        #     "please check it using our env checker:\n"
+        #     "https://stable-baselines3.readthedocs.io/en/master/common/env_checker.html"
+        # )
+        n_input_channels = observation_space.shape[0]
+        self.gcn = nn.Sequential(
+            pygnn.GCNConv(input_dims[0], 16),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+
+        # Compute shape by doing one forward pass
+        with th.no_grad():
+            n_flatten = self.gcn(th.as_tensor(observation_space.sample()[None]).float()).shape[1]
+
+        self.linear1 = nn.Sequential(nn.Linear(n_flatten, hidden_dims), nn.ReLU())
+        self.linear2 = nn.Sequential(nn.Linear(hidden_dims, output_dims), nn.ReLU())
+
+    def forward(self, observations) -> th.Tensor:
+        return self.linear2(self.linear1(self.gcn(observations)))
 
 
 def create_mlp(
